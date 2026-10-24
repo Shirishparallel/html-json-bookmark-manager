@@ -1,0 +1,152 @@
+import os
+import json
+import re
+import tkinter as tk
+from tkinter import filedialog, messagebox
+import customtkinter as ctk
+
+ctk.set_appearance_mode("System")
+ctk.set_default_color_theme("blue")
+
+class BookmarkCompilerApp(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        self.title("Master Bookmark Compiler")
+        self.geometry("600x700")
+        self.minsize(500, 600)
+        self.master_data = {}
+        self.setup_ui()
+
+    def setup_ui(self):
+        self.title_lbl = ctk.CTkLabel(self, text="Master Bookmark Compiler", font=ctk.CTkFont(size=20, weight="bold"))
+        self.title_lbl.pack(pady=(15, 5))
+        self.subtitle_lbl = ctk.CTkLabel(self, text="Offline standalone data compiler for HTML & JSON files.", font=ctk.CTkFont(size=12, slant="italic"))
+        self.subtitle_lbl.pack(pady=(0, 15))
+
+        self.ctrl_frame = ctk.CTkFrame(self)
+        self.ctrl_frame.pack(fill="x", padx=20, pady=5)
+        self.import_btn = ctk.CTkButton(self.ctrl_frame, text="Import File (.html / .json)", command=self.import_file, fg_color="#007bff", hover_color="#0056b3")
+        self.import_btn.pack(fill="x", padx=15, pady=10)
+        self.counter_lbl = ctk.CTkLabel(self.ctrl_frame, text="Master Data: 0 unique links loaded", font=ctk.CTkFont(size=13, weight="bold"))
+        self.counter_lbl.pack(pady=5)
+
+        self.search_frame = ctk.CTkFrame(self)
+        self.search_frame.pack(fill="x", padx=20, pady=10)
+        self.search_input = ctk.CTkEntry(self.search_frame, placeholder_text="Type to filter/sort results by URL string...")
+        self.search_input.pack(fill="x", padx=15, pady=10)
+        self.search_input.bind("<KeyRelease>", lambda event: self.render_results())
+
+        self.preview_lbl = ctk.CTkLabel(self, text="Compiled Database Live View:", font=ctk.CTkFont(size=12))
+        self.preview_lbl.pack(anchor="w", padx=25, pady=(5, 0))
+        self.textbox = ctk.CTkTextbox(self, font=ctk.CTkFont(family="Consolas", size=11))
+        self.textbox.pack(fill="both", expand=True, padx=20, pady=5)
+        self.textbox.configure(state="disabled")
+
+        self.action_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.action_frame.pack(fill="x", padx=20, pady=15)
+        self.export_btn = ctk.CTkButton(self.action_frame, text="Export Master List (HTML)", command=self.export_data, fg_color="#28a745", hover_color="#218838")
+        self.export_btn.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        self.clear_btn = ctk.CTkButton(self.action_frame, text="Clear Data", command=self.clear_data, fg_color="#dc3545", hover_color="#bd2130")
+        self.clear_btn.pack(side="right", fill="x", expand=True, padx=(5, 0))
+
+    def import_file(self):
+        file_path = filedialog.askopenfilename(
+            title="Select a file to compile",
+            filetypes=[("Supported Data Layouts", "*.html *.htm *.json"), ("HTML files", "*.html *.htm"), ("JSON files", "*.json")]
+        )
+        if not file_path: return
+
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                raw_content = f.read()
+
+            new_links = []
+            if file_path.lower().endswith(('.html', '.htm')):
+                new_links = self.parse_html_regex(raw_content)
+            elif file_path.lower().endswith('.json'):
+                new_links = self.parse_json_recursive(raw_content)
+
+            if not new_links:
+                messagebox.showwarning("No Matches Found", "No valid links were extracted.")
+                return
+
+            for title, url in new_links:
+                self.master_data[url.lower()] = {"title": title, "original_url": url}
+
+            self.counter_lbl.configure(text=f"Master Data: {len(self.master_data)} unique links loaded")
+            self.render_results()
+            messagebox.showinfo("Success", f"Successfully compiled {len(new_links)} items.")
+        except Exception as err:
+            messagebox.showerror("Import Failed", f"An error occurred:\n{str(err)}")
+
+    def parse_html_regex(self, content):
+        extracted = []
+        matches = re.findall(r'<a\s+[^>]*href=["\'](https?://[^"\']+|about:[^"\']+)["\'][^>]*>(.*?)</a>', content, re.IGNORECASE | re.DOTALL)
+        for url, text in matches:
+            clean_title = re.sub('<[^<]+?>', '', text).strip()
+            if not clean_title: clean_title = url
+            extracted.append((clean_title, url.strip()))
+        return extracted
+
+    def parse_json_recursive(self, content):
+        extracted = []
+        try:
+            parsed_data = json.loads(content)
+            def traverse_nodes(node):
+                if isinstance(node, dict):
+                    url = node.get("url") or node.get("uri") or node.get("href")
+                    title = node.get("title") or node.get("name") or url
+                    if url and (url.startswith(("http://", "https://", "about:"))):
+                        extracted.append((str(title).strip(), str(url).strip()))
+                    for key, val in node.items():
+                        if isinstance(val, (dict, list)): traverse_nodes(val)
+                elif isinstance(node, list):
+                    for nested_element in node: traverse_nodes(nested_element)
+            traverse_nodes(parsed_data)
+        except: pass
+        return extracted
+
+    def render_results(self):
+        query = self.search_input.get().lower()
+        filtered = [info for info in self.master_data.values() if query in info["original_url"].lower()]
+        filtered.sort(key=lambda x: x["original_url"].lower())
+
+        self.textbox.configure(state="normal")
+        self.textbox.delete("1.0", tk.END)
+        if not filtered:
+            self.textbox.insert(tk.END, "No results found.")
+        else:
+            for item in filtered:
+                self.textbox.insert(tk.END, f"Title: {item['title']}\nURL:   {item['original_url']}\n" + ("-" * 60) + "\n")
+        self.textbox.configure(state="disabled")
+
+    def export_data(self):
+        if not self.master_data:
+            messagebox.showwarning("Empty Database", "Nothing to export.")
+            return
+        output_path = filedialog.asksaveasfilename(title="Save Exported File", defaultextension=".html", filetypes=[("Standard Bookmark File", "*.html")])
+        if not output_path: return
+        try:
+            html_payload = "<!DOCTYPE NETSCAPE-Bookmark-file-1>\n<META HTTP-EQUIV=\"Content-Type\" CONTENT=\"text/html; charset=UTF-8\">\n<TITLE>Bookmarks</TITLE>\n<H1>Bookmarks</H1>\n<DL><p>\n"
+            for item in self.master_data.values():
+                html_payload += f'    <DT><A HREF="{item["original_url"]}">{item["title"]}</A>\n'
+            html_payload += "</DL><p>"
+            with open(output_path, "w", encoding="utf-8") as out_file:
+                out_file.write(html_payload)
+            messagebox.showinfo("Export Successful", "Saved file successfully!")
+        except Exception as e:
+            messagebox.showerror("Export Failed", str(e))
+
+    def clear_data(self):
+        if messagebox.askyesno("Erase Database", "Completely clear loaded data?"):
+            self.master_data.clear()
+            self.counter_lbl.configure(text="Master Data: 0 unique links loaded")
+            self.render_results()
+
+if __name__ == "__main__":
+    app = BookmarkCompilerApp()
+    app.mainloop()
+
+
+run it with    "python -m PyInstaller --noconsole --onefile app.py
+" after opening cmd in same folders
